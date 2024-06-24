@@ -1,0 +1,24 @@
+sentiment
+Python-based application that monitors messages in a specified Discord channel and performs various Natural Language Processing (NLP) tasks, including sentiment analysis, text summarization, and named entity recognition (NER). 
+
+Required Storage: ~4.7GiB
+
+The following dependencies are required to run the tool:
+selenium
+pandas
+scikit-learn
+textblob
+transformers
+torch
+aiohttp
+urwid
+cryptography
+requests
+zipfile
+shutil
+asyncio
+aiohttp
+sklearn
+urwid
+cryptography
+time
