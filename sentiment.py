@@ -1,306 +1,322 @@
-import subprocess
-import sys
 import os
 import logging
-import platform
-import requests
-import zipfile
-import shutil
-from pathlib import Path
-import asyncio
-import aiohttp
-from transformers import pipeline
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+import json
 import time
+import asyncio
 import csv
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.common.by import By
+from transformers import pipeline
 import urwid
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
-import pandas as pd
-from cryptography.fernet import Fernet
+import base64
+import matplotlib.pyplot as plt
+import io
+import threading
+from selenium.common.exceptions import NoSuchWindowException, WebDriverException
 
-# Required packages
-required_packages = [
-    'selenium', 'pandas', 'scikit-learn', 'textblob', 'transformers', 'torch', 'aiohttp', 'urwid', 'cryptography'
-]
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Install required packages
-def install_packages(packages):
-    for package in packages:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+# Replace this with your Discord token
+DISCORD_TOKEN = ' '
 
-install_packages(required_packages)
+# Hugging Face models
+sentiment_model = pipeline('sentiment-analysis', model="cardiffnlp/twitter-roberta-base-sentiment-latest")
+ner_model = pipeline('ner', model="dbmdz/bert-large-cased-finetuned-conll03-english")
+summarization_model = pipeline('summarization', model="facebook/bart-large-cnn")
 
-# Logger setup
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger()
+messages = []
+results = []
 
-# Encryption key setup
-KEY_FILE = "secret.key"
-TOKEN_FILE = "token.enc"
+class SentimentMonitorUI:
+    def __init__(self, messages, results):
+        self.messages = messages
+        self.results = results
+        self.filtered_messages = messages
+        self.logs = []
+        self.sentiment_stats = {'POSITIVE': 0, 'NEGATIVE': 0, 'NEUTRAL': 0}
+        self.keyword_counts = {}
 
-def generate_key():
-    key = Fernet.generate_key()
-    with open(KEY_FILE, 'wb') as key_file:
-        key_file.write(key)
-
-def load_key():
-    return open(KEY_FILE, 'rb').read()
-
-def encrypt_message(message):
-    key = load_key()
-    fernet = Fernet(key)
-    encrypted_message = fernet.encrypt(message.encode())
-    with open(TOKEN_FILE, 'wb') as token_file:
-        token_file.write(encrypted_message)
-
-def decrypt_message():
-    key = load_key()
-    fernet = Fernet(key)
-    with open(TOKEN_FILE, 'rb') as token_file:
-        encrypted_message = token_file.read()
-    return fernet.decrypt(encrypted_message).decode()
-
-def is_token_available():
-    return os.path.exists(KEY_FILE) and os.path.exists(TOKEN_FILE)
-
-# Verify if Chrome is installed
-def is_chrome_installed():
-    chrome_path = shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("chromium")
-    if chrome_path:
-        logger.info("Chrome is installed.")
-        return True
-    else:
-        logger.error("Chrome is not installed.")
-        return False
-
-if not is_chrome_installed():
-    logger.error("Please install Google Chrome and re-run the script.")
-    sys.exit(1)
-
-# Check for chromedriver
-def get_chromedriver():
-    if platform.system() == "Windows":
-        chromedriver_name = "chromedriver.exe"
-    else:
-        chromedriver_name = "chromedriver"
-    chromedriver_path = Path(chromedriver_name)
-
-    if not chromedriver_path.exists():
-        logger.info("chromedriver not found, downloading...")
-        url = f"https://chromedriver.storage.googleapis.com/91.0.4472.101/chromedriver_{platform.system().lower()}64.zip"
-        response = requests.get(url, stream=True)
-        with open("chromedriver.zip", "wb") as file:
-            for chunk in response.iter_content(chunk_size=8192):
-                file.write(chunk)
-        with zipfile.ZipFile("chromedriver.zip", "r") as zip_ref:
-            zip_ref.extractall()
-        os.remove("chromedriver.zip")
-        logger.info("chromedriver downloaded and extracted.")
-    else:
-        logger.info("chromedriver found.")
-
-get_chromedriver()
-
-# Initialize models
-model_name_sentiment = "cardiffnlp/twitter-roberta-base-sentiment-latest"
-sentiment_analysis = pipeline('sentiment-analysis', model=model_name_sentiment, tokenizer=model_name_sentiment)
-
-model_name_ner = "dbmdz/bert-large-cased-finetuned-conll03-english"
-ner_analysis = pipeline('ner', model=model_name_ner, tokenizer=model_name_ner)
-
-model_name_summarization = "facebook/bart-large-cnn"
-summarization = pipeline('summarization', model=model_name_summarization, tokenizer=model_name_summarization)
-
-# CSV file setup
-data_file = 'discord_messages.csv'
-
-# Ensure the CSV file is initialized
-if not Path(data_file).exists():
-    with open(data_file, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["content", "sentiment", "score", "summary", "entities"])
-
-# Setup Chrome options
-chrome_options = Options()
-chrome_options.add_argument("--headless")  # Ensure GUI is off
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-
-# Set path to chromedriver as per your configuration
-webdriver_service = Service("./chromedriver")
-
-# Function to log in to Discord
-def login_to_discord(email, password):
-    try:
-        driver.get('https://discord.com/login')
-        time.sleep(5)  # Let the page load
-
-        email_input = driver.find_element(By.NAME, 'email')
-        password_input = driver.find_element(By.NAME, 'password')
-
-        email_input.send_keys(email)
-        password_input.send_keys(password)
-        password_input.send_keys(Keys.RETURN)
-
-        time.sleep(5)  # Let the page load
-        logger.info('Logged in to Discord successfully.')
-
-    except Exception as e:
-        logger.error(f"Error during login: {e}")
-        driver.quit()
-        sys.exit(1)
-
-# Async function to monitor messages in a channel
-async def monitor_channel(session, channel_url, duration=60):
-    try:
-        driver.get(channel_url)
-        time.sleep(10)  # Let the page load
-
-        start_time = time.time()
-
-        while time.time() - start_time < duration:
-            messages = driver.find_elements(By.CLASS_NAME, 'messageContent-2qWWxC')
-            tasks = []
-
-            for message in messages:
-                content = message.text
-                tasks.append(analyze_and_save_message(content))
-                chat_viewer_text.set_text(chat_viewer_text.get_text()[0] + "\n" + content)
-
-            await asyncio.gather(*tasks)
-            time.sleep(5)  # Adjust the frequency of message fetching as needed
-
-    except Exception as e:
-        logger.error(f"Error during monitoring: {e}")
-
-# Async function to analyze sentiment and save to CSV file
-async def analyze_and_save_message(content):
-    try:
-        sentiment_result = sentiment_analysis(content)[0]
-        sentiment_label = sentiment_result['label']
-        sentiment_score = sentiment_result['score']
-
-        summary_result = summarization(content, max_length=50, min_length=25, do_sample=False)[0]
-        summary = summary_result['summary_text']
-
-        entities = ner_analysis(content)
-        entities_text = ", ".join([entity['word'] for entity in entities])
-
-        with open(data_file, mode='a', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow([content, sentiment_label, sentiment_score, summary, entities_text])
+        # Define main UI components
+        self.main_list = urwid.SimpleFocusListWalker([urwid.Text("Sentiment Monitor - Main Tab")])
+        self.console_list = urwid.SimpleFocusListWalker([urwid.Text("Sentiment Monitor - Console Output Tab")])
+        self.analytics_list = urwid.SimpleFocusListWalker([urwid.Text("Sentiment Monitor - Machine Learning Analytics Tab")])
+        self.status_list = urwid.SimpleFocusListWalker([urwid.Text("Sentiment Monitor - Status Tab")])
+        self.chat_list = urwid.SimpleFocusListWalker([urwid.Text("Sentiment Monitor - Chat Viewer Tab")])
+        self.logs_list = urwid.SimpleFocusListWalker([urwid.Text("Sentiment Monitor - Logs")])
         
-        logger.debug(f"Message: {content}, Sentiment: {sentiment_label}, Score: {sentiment_score}, Summary: {summary}, Entities: {entities_text}")
-
-    except Exception as e:
-        logger.error(f"Error during analysis: {e}")
-
-# Evaluate model performance
-def evaluate_model():
-    try:
-        data = pd.read_csv(data_file)
-        if not data.empty:
-            X = data['content']
-            y = data['sentiment']
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-            predictions = [sentiment_analysis(text)[0]['label'] for text in X_test]
-            report = classification_report(y_test, predictions, output_dict=True)
-            accuracy = report['accuracy']
-            status_text.set_text(f"Model Accuracy: {accuracy:.2f}\nNetwork Status: Connected\n")
-        else:
-            status_text.set_text("No data available for model evaluation.\nNetwork Status: Connected\n")
-    except Exception as e:
-        logger.error(f"Error during model evaluation: {e}")
-        status_text.set_text(f"Error during model evaluation: {e}\nNetwork Status: Connected\n")
-
-# Initialize the web driver
-driver = webdriver.Chrome(service=webdriver_service, options=chrome_options)
-
-# UI Components
-console_output = urwid.Text("Console Output\n")
-ml_analytics_output = urwid.Text("Machine Learning Analytics\n")
-status_text = urwid.Text("Status: Initializing...\n")
-chat_viewer_text = urwid.Text("Chat Viewer\n")
-
-console_tab = urwid.LineBox(console_output, title="Console")
-ml_analytics_tab = urwid.LineBox(ml_analytics_output, title="ML Analytics")
-status_tab = urwid.LineBox(status_text, title="Status")
-chat_viewer_tab = urwid.LineBox(chat_viewer_text, title="Chat Viewer")
-main_tab = urwid.LineBox(urwid.Text("Main Page\nSummary and Stats\n"), title="Main")
-
-tabs = [main_tab, console_tab, ml_analytics_tab, status_tab, chat_viewer_tab]
-current_tab = 0
-
-def switch_tab(input):
-    global current_tab
-    if input == 'tab':
-        current_tab = (current_tab + 1) % len(tabs)
-    elif input == 'q':
-        raise urwid.ExitMainLoop()
-
-    display_area.original_widget = tabs[current_tab]
-
-display_area = urwid.Padding(urwid.AttrMap(tabs[current_tab], None))
-main_loop = urwid.MainLoop(display_area, unhandled_input=switch_tab)
-
-# Async main execution
-async def main():
-    async with aiohttp.ClientSession() as session:
-        login_to_discord(DISCORD_EMAIL, DISCORD_PASSWORD)
-        evaluate_model()
-        await monitor_channel(session, CHANNEL_URL, duration=300)  # Monitor for 5 minutes
-
-def first_time_setup():
-    text = urwid.Text("First Time Setup\nPlease enter your Discord token:")
-    edit = urwid.Edit()
-    button = urwid.Button("Save", on_press=save_token, user_data=edit)
-    pile = urwid.Pile([text, edit, button])
-    filler = urwid.Filler(pile)
-    main_loop.widget = filler
-
-def save_token(button, edit):
-    token = edit.get_edit_text()
-    encrypt_message(token)
-    main_loop.widget = urwid.Text("Token saved. Please restart the application.")
-    raise urwid.ExitMainLoop()
-
-def start_app():
-    if is_token_available():
-        # Show progress bar
-        progress = urwid.ProgressBar('pg normal', 'pg complete', 0, 1, 'left')
-        text = urwid.Text("Decrypting token...")
-        pile = urwid.Pile([progress, text])
-        filler = urwid.Filler(pile)
-        main_loop.widget = filler
+        self.main_view = urwid.ListBox(self.main_list)
+        self.console_view = urwid.ListBox(self.console_list)
+        self.analytics_view = urwid.ListBox(self.analytics_list)
+        self.status_view = urwid.ListBox(self.status_list)
+        self.chat_view = urwid.ListBox(self.chat_list)
+        self.logs_view = urwid.ListBox(self.logs_list)
         
-        # Simulate decryption delay
-        for i in range(10):
-            time.sleep(0.1)
-            progress.set_completion((i + 1) / 10.0)
-            main_loop.draw_screen()
+        self.search_edit = urwid.Edit("Search: ")
+        self.search_box = urwid.LineBox(self.search_edit, title="Search Box", title_align='left')
+        self.search_view = urwid.Pile([self.search_box, self.chat_view])
         
-        # Decrypt token
+        self.header = urwid.Text("Sentiment Monitor - Press TAB to switch tabs, Enter to search")
+        self.footer = urwid.Text("Main | Console | Analytics | Status | Chat Viewer | Logs")
+        
+        self.layout = urwid.Frame(
+            body=self.main_view,
+            header=self.header,
+            footer=self.footer
+        )
+        
+        self.views = [self.main_view, self.console_view, self.analytics_view, self.status_view, self.search_view, self.logs_view]
+        self.current_view = 0
+        
+        self.loop = urwid.MainLoop(self.layout, unhandled_input=self.handle_input)
+    
+    def handle_input(self, key):
+        if key == 'tab':
+            self.current_view = (self.current_view + 1) % len(self.views)
+            self.layout.body = self.views[self.current_view]
+        elif key == 'enter':
+            self.filter_messages(self.search_edit.edit_text)
+    
+    def filter_messages(self, query):
+        self.filtered_messages = [msg for msg in self.messages if query.lower() in msg['message'].lower() or query.lower() in msg['user'].lower()]
+        self.update_chat_view()
+    
+    def update_chat_view(self):
+        self.chat_list.clear()
+        for message_data in self.filtered_messages:
+            self.chat_list.append(urwid.Text(f"[{message_data['timestamp']}] {message_data['user']}: {message_data['message']}"))
         try:
-            global DISCORD_TOKEN
-            DISCORD_TOKEN = decrypt_message()
-            text.set_text("Decryption successful.")
-            main_loop.widget = urwid.Text("Welcome to the Discord Sentiment and Analysis Tool")
-            main_loop.draw_screen()
-            asyncio.ensure_future(main())
-            main_loop.run()
-        except Exception as e:
-            logger.error(f"Error decrypting token: {e}")
-            main_loop.widget = urwid.Text(f"Error decrypting token: {e}")
-    else:
-        first_time_setup()
+            self.loop.draw_screen()
+        except RuntimeError as e:
+            logging.error(f"Error drawing screen: {e}")
+    
+    def refresh(self, loop=None, data=None):
+        try:
+            self.loop.draw_screen()
+        except RuntimeError as e:
+            logging.error(f"Error drawing screen: {e}")
+        self.loop.set_alarm_in(1, self.refresh)  # Refresh every second
+    
+    def run(self):
+        self.refresh()
+        self.loop.run()
+    
+    def log_messages(self, new_messages):
+        for message_data in new_messages:
+            self.messages.append(message_data)
+            self.filtered_messages.append(message_data)
+            self.chat_list.append(urwid.Text(f"[{message_data['timestamp']}] {message_data['user']} - {message_data['message']}"))
+        try:
+            self.loop.draw_screen()
+        except RuntimeError as e:
+            logging.error(f"Error drawing screen: {e}")
+    
+    def log_result(self, result):
+        sentiment = result['sentiment'][0]['label']
+        entities = ', '.join([entity['word'] for entity in result['entities']])
+        summary = result['summary'][0]['summary_text']
+        
+        self.analytics_list.append(urwid.Text(f"Timestamp: {result['timestamp']}"))
+        self.analytics_list.append(urwid.Text(f"User: {result['user']}"))
+        self.analytics_list.append(urwid.Text(f"Message: {result['message']}"))
+        self.analytics_list.append(urwid.Text(f"Sentiment: {sentiment}"))
+        self.analytics_list.append(urwid.Text(f"Entities: {entities}"))
+        self.analytics_list.append(urwid.Text(f"Summary: {summary}"))
+        self.analytics_list.append(urwid.Divider())
+        try:
+            self.loop.draw_screen()
+        except RuntimeError as e:
+            logging.error(f"Error drawing screen: {e}")
+    
+    def log_status(self, status):
+        self.status_list.append(urwid.Text(status))
+        self.logs.append(status)
+        self.logs_list.append(urwid.Text(status))
+        try:
+            self.loop.draw_screen()
+        except RuntimeError as e:
+            logging.error(f"Error drawing screen: {e}")
+    
+    def update_analytics(self, sentiment_stats, keyword_counts):
+        self.analytics_list.clear()
+        self.analytics_list.append(urwid.Text("Sentiment Distribution"))
+        pie_chart = generate_sentiment_pie_chart(sentiment_stats)
+        pie_chart_image = urwid.Text(('banner', f"{pie_chart}"), align='center')
+        self.analytics_list.append(pie_chart_image)
+        self.analytics_list.append(urwid.Divider())
+        
+        self.analytics_list.append(urwid.Text("Keyword Trends"))
+        bar_chart = generate_keyword_bar_chart(keyword_counts)
+        bar_chart_image = urwid.Text(('banner', f"{bar_chart}"), align='center')
+        self.analytics_list.append(bar_chart_image)
+        self.analytics_list.append(urwid.Divider())
+        try:
+            self.loop.draw_screen()
+        except RuntimeError as e:
+            logging.error(f"Error drawing screen: {e}")
 
-try:
-    start_app()
-finally:
-    driver.quit()
+# Function to generate pie chart for sentiment distribution
+def generate_sentiment_pie_chart(sentiment_stats):
+    labels = sentiment_stats.keys()
+    sizes = sentiment_stats.values()
+    fig, ax = plt.subplots()
+    ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140)
+    ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+# Function to generate bar chart for keyword trends
+def generate_keyword_bar_chart(keyword_counts):
+    sorted_keywords = sorted(keyword_counts.items(), key=lambda item: item[1], reverse=True)
+    labels, values = zip(*sorted_keywords)
+    fig, ax = plt.subplots()
+    ax.bar(labels[:10], values[:10])  # Display top 10 keywords
+    ax.set_ylabel('Frequency')
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+def discord_login_with_token(driver, token):
+    driver.get("https://discord.com/login")
+    script = """
+    (function() {{
+        document.body.appendChild(document.createElement('iframe')).contentWindow.localStorage.token = `"{}"`;
+    }})();
+    """.format(token)
+    driver.execute_script(script)
+    driver.get("https://discord.com/channels/@me")
+    time.sleep(5)  # Wait for the page to load
+
+def monitor_messages(driver, messages, ui):
+    while True:
+        try:
+            elements = driver.find_elements(By.CLASS_NAME, 'messageContent-2qWWxC')
+        except NoSuchWindowException as e:
+            logging.error(f"Window closed: {e}")
+            break
+        except WebDriverException as e:
+            logging.error(f"WebDriver error: {e}")
+            time.sleep(1)
+            continue
+        
+        new_messages = []
+        for element in elements:
+            try:
+                message = element.text
+                timestamp = element.find_element(By.CLASS_NAME, 'timestampClassName').text  # Replace with actual timestamp class name
+                user = element.find_element(By.CLASS_NAME, 'usernameClassName').text  # Replace with actual username class name
+            except Exception as e:
+                logging.error(f"Error reading message: {e}")
+                continue
+
+            message_data = {"message": message, "timestamp": timestamp, "user": user}
+            messages.append(message_data)
+            new_messages.append(message_data)
+
+        if new_messages:
+            ui.log_messages(new_messages)
+        time.sleep(1)
+
+def process_messages(messages, results, ui, sentiment_model, ner_model, summarization_model, sentiment_stats, keyword_counts):
+    while True:
+        new_results = []
+        for message_data in messages:
+            message = message_data['message']
+            timestamp = message_data['timestamp']
+            user = message_data['user']
+            try:
+                sentiment = sentiment_model(message)
+                entities = ner_model(message)
+                summary = summarization_model(message, max_length=50, min_length=25, do_sample=False)
+            except Exception as e:
+                logging.error(f"Error processing message: {e}")
+                ui.log_status(f"Error processing message: {e}")
+                continue
+            result = {
+                "message": message,
+                "timestamp": timestamp,
+                "user": user,
+                "sentiment": sentiment,
+                "entities": entities,
+                "summary": summary
+            }
+            results.append(result)
+            new_results.append(result)
+            update_sentiment_stats(sentiment_stats, sentiment[0]['label'])
+            update_keyword_counts(keyword_counts, entities)
+        if new_results:
+            ui.update_analytics(sentiment_stats, keyword_counts)
+            time.sleep(1)
+
+def update_sentiment_stats(sentiment_stats, sentiment):
+    if sentiment in sentiment_stats:
+        sentiment_stats[sentiment] += 1
+    else:
+        sentiment_stats[sentiment] = 1
+
+def update_keyword_counts(keyword_counts, entities):
+    for entity in entities:
+        keyword = entity['word']
+        if keyword in keyword_counts:
+            keyword_counts[keyword] += 1
+        else:
+            keyword_counts[keyword] = 1
+
+def save_results_to_csv(results, file_path='results.csv'):
+    fieldnames = ['timestamp', 'user', 'message', 'sentiment', 'entities', 'summary']
+    try:
+        logging.info("Starting to save results to CSV.")
+        with open(file_path, mode='w', newline='', encoding='utf-8') as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            logging.info("Writing header to CSV.")
+            writer.writeheader()
+            for result in results:
+                writer.writerow({
+                    'timestamp': result['timestamp'],
+                    'user': result['user'],
+                    'message': result['message'],
+                    'sentiment': result['sentiment'][0]['label'],
+                    'entities': ', '.join([entity['word'] for entity in result['entities']]),
+                    'summary': result['summary'][0]['summary_text']
+                })
+                logging.info(f"Written result for message from {result['user']} at {result['timestamp']}.")
+        logging.info(f"Results successfully saved to {file_path}")
+    except Exception as e:
+        logging.error(f"Error saving results to CSV: {e}")
+
+ui = SentimentMonitorUI(messages, results)
+
+def main():
+    # Setup WebDriver
+    options = webdriver.ChromeOptions()
+    service = ChromeService(executable_path='./chromedriver.exe')
+    driver = webdriver.Chrome(service=service, options=options)
+
+    # Login to Discord using the token
+    discord_login_with_token(driver, DISCORD_TOKEN)
+
+    # Start monitoring and processing messages
+    monitor_thread = threading.Thread(target=monitor_messages, args=(driver, messages, ui))
+    process_thread = threading.Thread(target=process_messages, args=(messages, results, ui, sentiment_model, ner_model, summarization_model, ui.sentiment_stats, ui.keyword_counts))
+    
+    monitor_thread.start()
+    process_thread.start()
+    
+    try:
+        ui.run()
+    except KeyboardInterrupt:
+        logging.info("Exiting program.")
+    except Exception as e:
+        logging.error(f"Unexpected error: {e}")
+        ui.log_status(f"Unexpected error: {e}")
+    
+    # Save results to CSV
+    logging.info("Saving results to CSV before exiting.")
+    save_results_to_csv(results)
+
+if __name__ == "__main__":
+    main()
